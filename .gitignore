@@ -1,0 +1,22 @@
+# Общие файлы, которые не нужно коммитить
+*.log
+*.env
+.DS_Store
+
+# Настройки редакторов
+.vscode/
+.idea/
+
+# Python backend
+backend/__pycache__/
+backend/*.pyc
+backend/.venv/
+backend/venv/
+backend/*.sqlite
+backend/*.db
+
+# Node.js frontend
+frontend/node_modules/
+frontend/build/
+frontend/dist/
+frontend/.env
