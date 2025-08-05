@@ -1,0 +1,20 @@
+/* сделает фон фильтра плотным 
+.ag-theme-alpine .ag-filter {
+  background-color: white !important;  
+}
+*/
+
+.ag-theme-alpine .ag-filter-select,
+.ag-theme-alpine .ag-filter-select option {
+  color: black !important;             /* текст в выпадающем списке */
+  background-color: white !important;
+  opacity: 1 !important;               /* убираем прозрачность */
+}
+
+/* поле ввода фильтра 
+.ag-theme-alpine .ag-input-field-input {
+  background-color: white !important;  
+  color: black !important;
+  opacity: 1 !important;
+}
+*/
