@@ -7,6 +7,7 @@ from flask_cors import CORS
 # библиотека для работы с PostgreSQL
 import psycopg2
 from psycopg2 import sql  # основной драйвер Python для PostgreSQL
+from psycopg2 import pool # пул соединений
 
 # request - предоставляет доступ к данным, которые пользователь отправляет на сервер
 from flask import request  # используется для получения данных из форм
@@ -23,6 +24,34 @@ POSTGRESQL_CONFIG = {
     'host': 'localhost',
     'port': 5432                    # по умолчанию
 }
+
+
+db_pool = None  # глобальная переменная для пула
+
+def init_db_pool(minconn=1, maxconn=15):
+    # Инициализирует пул соединений. Вызывать один раз при старте приложения
+    global db_pool
+    if db_pool is None:
+        db_pool = pool.SimpleConnectionPool(
+            minconn,
+            maxconn,
+            **POSTGRESQL_CONFIG
+        )
+
+def get_conn():  # Взять соединение из пула
+    if db_pool is None:
+        raise RuntimeError("Connection pool is not initialized. Call init_db_pool() first.")
+    return db_pool.getconn()
+
+def release_conn(conn):  # Вернуть соединение в пул
+    if db_pool is not None and conn is not None:
+        db_pool.putconn(conn)
+
+def close_pool():  # Закрыть все соединения в пуле (вызывать при завершении приложения)
+    global db_pool
+    if db_pool is not None:
+        db_pool.closeall()
+        db_pool = None
 
 
 # СОЗДАНИЕ всех БД
@@ -99,28 +128,30 @@ def get_firms():
 
 
 def get_all_records(table_name):  # получение всех записей из таблицы
-    conn = psycopg2.connect(**POSTGRESQL_CONFIG) # объект соединения с базой данных. Пока он открыт можем делать SQL-запросы
-    cursor = conn.cursor()  # специальный объект для отправления SQL-запросы к БД и получения результатов
-    request_str = f'SELECT * FROM {table_name}'
-    cursor.execute(request_str)  # выбираем все записи, * - все столбцы
+    conn = get_conn()
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        # безопасная подстановка имени таблицы через psycopg2.sql
+        query = sql.SQL("SELECT * FROM {}").format(sql.Identifier(table_name))
+        cursor.execute(query)
+        rows = cursor.fetchall()
 
-    rows = cursor.fetchall()  # Все строки из результата запроса загружаются в память в виде списка кортежей
+        #  Получаем имена столбцов 
+        colnames = [desc[0] for desc in cursor.description]
 
-    #  Получаем имена столбцов 
-    # cursor.description — это список описаний столбцов (имён и типов)
-    # desc[0] - имя столбца
-    colnames = [desc[0] for desc in cursor.description] # cursor.description — это список описаний столбцов (имён и типов
+        #  Формирование списка словарей для удобного преобразования в JSON
+        list_table = [ dict(zip(colnames, row)) for row in rows ]
+        return list_table
+    finally:  # гарантирует возврат соединения в пул
+        if cursor:
+            cursor.close()
+        release_conn(conn)
 
-    #  Формирование списка словарей для удобного преобразования в JSON
-    list_table = []
-    for row in rows:
-        line = dict(zip(colnames, row)) # быстрое преобразование строки в словарь
-        list_table.append(line)
 
-    cursor.close()
-    conn.close()
-    return list_table
 
+
+    
 
 # Удаление записи
 
@@ -140,14 +171,18 @@ def delete_firm(id):
 
 
 def delete_record(table_name, id):
-    conn = psycopg2.connect(**POSTGRESQL_CONFIG)
-    cursor = conn.cursor()
-    request_str = f'DELETE FROM {table_name} WHERE id = %s'
-    cursor.execute(request_str, (id,))
-    conn.commit()
-    cursor.close()
-    conn.close()
-    return jsonify({'message': 'Запись удалена'}), 200
+    conn = get_conn()  #  берём соединение из пула
+    cursor = None
+    try:
+        cursor = conn.cursor()  # создаём курсор для выполнения SQL
+        request_str = f'DELETE FROM {table_name} WHERE id = %s'
+        cursor.execute(request_str, (id,))  # это метод курсора, который выполняет SQL-запрос к БД
+        conn.commit()  # сохранение
+        return jsonify({'message': 'Запись удалена'}), 200
+    finally:  # гарантирует возврат соединения в пул
+        if cursor:
+            cursor.close()
+        release_conn(conn)
 
 
 # Добавление записи
@@ -208,13 +243,17 @@ def add_task():
 
 
 def add_record(request_str, values):    
-    conn = psycopg2.connect(**POSTGRESQL_CONFIG)
-    cursor = conn.cursor()
-    cursor.execute(request_str, values)
-    conn.commit()
-    cursor.close()
-    conn.close()
-    return jsonify({'message': 'Запись добавлена'}), 200
+    conn = get_conn()
+    cursor = None
+    try:
+        cursor = conn.cursor()  # создаём курсор для выполнения SQL
+        cursor.execute(request_str, values)
+        conn.commit()
+        return jsonify({'message': 'Запись добавлена'}), 200
+    finally:  # гарантирует возврат соединения в пул
+        if cursor:
+            cursor.close()
+        release_conn(conn)   
 
 
 # Корректировка ячейки таблицы
@@ -232,28 +271,34 @@ def update_cell():
 
 
 def update_cell_value(table_name, field_name, new_value, record_id):
-    conn = psycopg2.connect(**POSTGRESQL_CONFIG)
-    cursor = conn.cursor()
+    conn = get_conn()
+    cursor = None
 
-    query = f"UPDATE {table_name} SET {field_name} = %s WHERE id = %s"
+    request_str = f"UPDATE {table_name} SET {field_name} = %s WHERE id = %s"
 
     try:
-        cursor.execute(query, (new_value, record_id))
+        cursor = conn.cursor()
+        cursor.execute(request_str, (new_value, record_id))
         conn.commit()
+        return jsonify({'message': 'Ячейка обновлена'}), 200
     except Exception as e:
         conn.rollback()
         return jsonify({'error': str(e)}), 500
     finally:
-        cursor.close()
-        conn.close()
-
-    return jsonify({'message': 'Ячейка обновлена'}), 200
+        if cursor:
+            cursor.close()
+        release_conn(conn)  
 
 
 # Запуск приложения, если файл запущен напрямую
 if __name__ == '__main__':
+    init_db_pool(minconn=1, maxconn=15)  # инициализируем пул
+
     init_db()  # создаем таблицу, если ее нет
-    app.run(debug=True, host='127.0.0.1', port=5001)
+    try: 
+        app.run(debug=True, host='127.0.0.1', port=5001)
+    finally:
+        close_pool()
 
 
 
