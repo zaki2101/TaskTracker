@@ -50,7 +50,7 @@ function Managers_table({ onBack }) {
   useEffect(() => {   
     /*  отправляет HTTP-запрос на указанный адрес (в нашем случае к нашему backend, 
     который отдаёт JSON-список менеджеров)*/  
-    fetch('http://localhost:5001/api/managers')  
+    fetch('http://localhost:5001/api/managers', {credentials: 'include'})  
     .then(response => response.json())      // когда сервер вернул ответ => преобразуем его в json 
     .then(data => { setManagers(data);  // обновляет состояние переменной managers
     })  
@@ -76,6 +76,7 @@ function Managers_table({ onBack }) {
     try {
       const response = await fetch('http://127.0.0.1:5001/api/add_manager', {
         method: 'POST', // добавляем данные
+        credentials: 'include', 
         headers: {
             'Content-Type': 'application/json' //  отправка данных в форматем json
         }, body: JSON.stringify(newManager) // превращаем объект newManager в JSON‑строку для отправки
@@ -157,8 +158,9 @@ function Managers_table({ onBack }) {
     return;
   }
   try {
-    const response = await fetch(`http://127.0.0.1:5001/api/delete_manager/${id}`, {
-      method: 'DELETE'
+    const response = await fetch(`http://localhost:5001/api/delete_manager/${id}`, {
+      method: 'DELETE',
+      credentials: 'include'  // необходимо для разрешения передавать cookies
     });
     if (response.ok) {
       console.log('Менеджер успешно удалён');
@@ -197,9 +199,10 @@ function Managers_table({ onBack }) {
         }
         try {
           // Делаем PATCH-запрос на сервер с новым значением для частичного обновления
-          const response = await fetch(`http://127.0.0.1:5001/api/update_cell`, {
+          const response = await fetch(`http://localhost:5001/api/update_cell`, {
           method: 'PATCH',
           headers: {'Content-Type': 'application/json'},
+          credentials: 'include',  // необходимо для разрешения передавать cookies
           body: JSON.stringify({ 
             table: 'managers',
             field: updatedField,

@@ -1,8 +1,9 @@
 
 from flask import Flask  # основной класс для создания веб-приложения на Python
 from flask import jsonify  # функция для преобразования данных Python в JSON
+from flask import session 
 from flask_cors import CORS
-#import sqlite3  # библиотека для работы с SQLite базой данных
+
 
 # библиотека для работы с PostgreSQL
 import psycopg2
@@ -14,7 +15,18 @@ from flask import request  # используется для получения 
 import os
 
 app = Flask(__name__)  # создание экземпляра приложения Flask
-CORS(app)  # Разрешаем CORS для всех маршрутов и доменов
+app.secret_key = 'my_super_secret_key_12345' # для использования сессий необходимо задать ключ
+
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  
+app.config['SESSION_COOKIE_SECURE'] = False
+#app.config['SESSION_COOKIE_SAMESITE'] = 'None' для сети
+#app.config['SESSION_COOKIE_SECURE'] = True для сети
+
+
+#CORS(app)  # Разрешаем CORS для всех маршрутов и доменов
+#CORS(app, supports_credentials=True)
+CORS(app, supports_credentials=True, origins=["http://localhost:3000"])
+
 
 # словарь с параметрами подключения
 POSTGRESQL_CONFIG = {
@@ -54,7 +66,7 @@ def close_pool():  # Закрыть все соединения в пуле (в�
         db_pool = None
 
 
-# СОЗДАНИЕ всех БД
+# СОЗДАНИЕ БД (таблицы managers, tasks, firms)
 def init_db():
     conn = psycopg2.connect(**POSTGRESQL_CONFIG) # conn — объект соединения с PostgreSQL    
     cursor = conn.cursor()
@@ -109,6 +121,7 @@ def init_db():
 # определение маршрута (endpoint) для вывода всех записей таблицы МЕНЕДЖЕРЫ
 @app.route('/api/managers')
 def get_managers():
+    print('def get_managers')
     table_name = 'managers'
     return jsonify(get_all_records(table_name))  # возвращение данных клиенту в формате JSON
 
@@ -130,16 +143,15 @@ def get_firms():
 def get_all_records(table_name):  # получение всех записей из таблицы
     conn = get_conn()
     cursor = None
+    print('роль в списке менеджеров пользователя***:', session.get('user_role'))
     try:
         cursor = conn.cursor()
         # безопасная подстановка имени таблицы через psycopg2.sql
-        query = sql.SQL("SELECT * FROM {}").format(sql.Identifier(table_name))
-        cursor.execute(query)
+        request_str = sql.SQL("SELECT * FROM {}").format(sql.Identifier(table_name))
+        cursor.execute(request_str)
         rows = cursor.fetchall()
-
         #  Получаем имена столбцов 
         colnames = [desc[0] for desc in cursor.description]
-
         #  Формирование списка словарей для удобного преобразования в JSON
         list_table = [ dict(zip(colnames, row)) for row in rows ]
         return list_table
@@ -147,6 +159,7 @@ def get_all_records(table_name):  # получение всех записей �
         if cursor:
             cursor.close()
         release_conn(conn)
+
 
 
 
@@ -171,6 +184,11 @@ def delete_firm(id):
 
 
 def delete_record(table_name, id):
+    print('Текущая роль пользователя:', session.get('user_role'))
+
+    if session.get('user_role') != 'admin':  # Проверка прав
+        return jsonify({'error': 'У вас нет прав на удаление записей'}), 403
+
     conn = get_conn()  #  берём соединение из пула
     cursor = None
     try:
@@ -290,15 +308,54 @@ def update_cell_value(table_name, field_name, new_value, record_id):
         release_conn(conn)  
 
 
+# Проверка логина
+@app.route('/api/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    username = data.get('username')
+
+    if not username:
+        return jsonify({'success': False, 'error': 'Логин не указан'}), 400
+
+    conn = get_conn()
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        # Проверяем, есть ли пользователь в таблице managers
+        cursor.execute("SELECT role FROM managers WHERE login = %s", (username,))
+        role_row = cursor.fetchone() # role_row будет кортежем с одним элементом, например ('admin',)
+
+        if role_row:
+            user_role = role_row[0]
+            print(user_role)
+            session['user_role'] = user_role  # сохраняет роль в сессии
+            print(' роль пользователя:', session.get('user_role'))
+
+            session['login'] = username  # сохраняет логин в сессии
+            return jsonify({'success': True}), 200
+        else:
+            return jsonify({'success': False, 'error': 'Пользователь не найден'}), 401
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        release_conn(conn)
+
+
+
 # Запуск приложения, если файл запущен напрямую
 if __name__ == '__main__':
     init_db_pool(minconn=1, maxconn=15)  # инициализируем пул
 
-    init_db()  # создаем таблицу, если ее нет
+    init_db()  # создаем таблицы, если их нет
     try: 
-        app.run(debug=True, host='127.0.0.1', port=5001)
+        #app.run(debug=True, host='127.0.0.1', port=5001)
+        app.run(debug=True, host='localhost', port=5001)
     finally:
         close_pool()
+
+
 
 
 
